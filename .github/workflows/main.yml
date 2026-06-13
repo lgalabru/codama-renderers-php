@@ -1,0 +1,76 @@
+name: Main
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  # Among other things, opts out of Turborepo telemetry. See https://consoledonottrack.com/.
+  DO_NOT_TRACK: '1'
+  NODE_VERSION: 20
+
+jobs:
+  test:
+    name: Build & unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Git checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build JS and types
+        run: pnpm build
+
+      - name: Run unit tests
+        run: pnpm test:unit
+
+  e2e:
+    name: E2E (generated PHP)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Git checkout
+        uses: actions/checkout@v4
+
+      - name: Check out the conformance corpus as a sibling directory
+        run: git clone --depth 1 https://github.com/lgalabru/codama-conformance.git "$GITHUB_WORKSPACE/../conformance"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          # The pinned dev tooling (symfony/console 8.x via php-cs-fixer) requires PHP >= 8.4.
+          php-version: '8.4'
+          coverage: pcov
+          tools: composer
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build JS and types
+        run: pnpm build
+
+      - name: Install PHP dev tools (php-cs-fixer, phpstan, phpunit)
+        run: composer install --working-dir=tools --no-interaction --no-progress
+
+      - name: Generate clients and run the e2e suite
+        run: pnpm test:e2e

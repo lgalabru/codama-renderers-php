@@ -1,0 +1,11 @@
+{
+    "description": "Dev tooling for linting and coverage-testing the generated PHP fixtures (not shipped).",
+    "require-dev": {
+        "friendsofphp/php-cs-fixer": "^3.64",
+        "phpstan/phpstan": "^2.0",
+        "phpunit/phpunit": "^12.0"
+    },
+    "config": {
+        "sort-packages": true
+    }
+}

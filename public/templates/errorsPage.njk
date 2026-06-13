@@ -1,0 +1,38 @@
+{% extends "layout.njk" %}
+{% block main %}
+
+/**
+ * Program error codes of the {{ programName }} program.
+ */
+final class {{ className }}
+{
+    private function __construct() {}
+
+{% for error in errors %}
+    /** {{ error.message }} */
+    public const {{ error.constName }} = {{ error.code }};
+
+{% endfor %}
+    /** Maps error codes to their human-readable messages. */
+    public const MESSAGES = [
+{% for error in errors %}
+        {{ error.code }} => {{ error.messageLiteral }},
+{% endfor %}
+    ];
+
+    /** Returns the message of the given error code, or `null` when unknown. */
+    public static function message(int $code): ?string
+    {
+        return self::MESSAGES[$code] ?? null;
+    }
+
+    /** Returns a throwable {@see ProgramException} for the given error code. */
+    public static function exception(int $code): ProgramException
+    {
+        return new ProgramException(
+            $code,
+            self::MESSAGES[$code] ?? 'Unknown {{ programName }} program error code: ' . $code,
+        );
+    }
+}
+{% endblock %}

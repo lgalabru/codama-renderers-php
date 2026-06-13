@@ -1,0 +1,15 @@
+{% extends "layout.njk" %}
+{% block main %}
+
+/**
+ * An account referenced by an instruction.
+ */
+final class AccountMeta
+{
+    public function __construct(
+        public readonly Pubkey $pubkey,
+        public readonly bool $isSigner,
+        public readonly bool $isWritable,
+    ) {}
+}
+{% endblock %}

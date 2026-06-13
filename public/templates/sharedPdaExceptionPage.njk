@@ -1,0 +1,10 @@
+{% extends "layout.njk" %}
+{% block main %}
+
+/**
+ * Thrown when a program derived address cannot be created for the given
+ * seeds: the candidate address lies on the ed25519 curve, or no viable
+ * bump seed exists.
+ */
+final class PdaException extends ClientException {}
+{% endblock %}

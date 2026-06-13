@@ -1,0 +1,23 @@
+{% extends "layout.njk" %}
+{% block main %}
+
+/**
+ * The {{ programName }} program.
+ */
+final class {{ className }}
+{
+    /** The program ID as a base58 string. */
+    public const ADDRESS = {{ addressLiteral }};
+
+    /** The program name. */
+    public const NAME = {{ nameLiteral }};
+
+    private function __construct() {}
+
+    /** Returns the program ID as a {@see Pubkey}. */
+    public static function id(): Pubkey
+    {
+        return Pubkey::fromBase58(self::ADDRESS);
+    }
+}
+{% endblock %}

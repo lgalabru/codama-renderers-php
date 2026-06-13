@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  PHPUnit configuration for the e2e coverage suite of the generated PHP
+  clients. See e2e/test.sh for the exact invocation (php with
+  zend.assertions, assert.exception and pcov.enabled, run from the
+  package root, using this file as the phpunit configuration).
+
+  Coverage is collected (via pcov) over the generated fixture clients only;
+  `tools/check-coverage.php` then enforces the Shared/ runtime threshold.
+-->
+<phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:noNamespaceSchemaLocation="vendor/phpunit/phpunit/phpunit.xsd"
+         bootstrap="vendor/autoload.php"
+         cacheDirectory="../e2e/phpunit/coverage/.phpunit.cache"
+         colors="true"
+         failOnRisky="true"
+         failOnWarning="true">
+    <testsuites>
+        <testsuite name="generated-php">
+            <directory>../e2e/phpunit</directory>
+        </testsuite>
+    </testsuites>
+    <source>
+        <include>
+            <directory suffix=".php">../e2e/dummy/generated</directory>
+            <directory suffix=".php">../e2e/memo/generated</directory>
+            <directory suffix=".php">../e2e/pump-fun/generated</directory>
+            <directory suffix=".php">../e2e/system/generated</directory>
+        </include>
+    </source>
+</phpunit>
