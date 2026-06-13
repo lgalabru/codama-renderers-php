@@ -1,0 +1,22 @@
+{% extends "layout.njk" %}
+{% block main %}
+
+/*
+ * Minimal PSR-4 style autoloader so the generated client can be used
+ * without Composer. Simply `require` this file:
+ *
+ *     require __DIR__ . '/autoload.php';
+ */
+spl_autoload_register(static function (string $class): void {
+    $prefix = {{ prefixLiteral }};
+    if (!str_starts_with($class, $prefix)) {
+        return;
+    }
+    $file = __DIR__ . DIRECTORY_SEPARATOR
+        . str_replace('\\', DIRECTORY_SEPARATOR, substr($class, strlen($prefix)))
+        . '.php';
+    if (is_file($file)) {
+        require_once $file;
+    }
+});
+{% endblock %}

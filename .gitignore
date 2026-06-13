@@ -1,0 +1,7 @@
+.DS_Store
+dist
+node_modules
+e2e/*/generated
+tools/vendor
+coverage
+e2e/phpunit/coverage

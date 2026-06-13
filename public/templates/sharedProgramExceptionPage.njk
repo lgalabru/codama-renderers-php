@@ -1,0 +1,20 @@
+{% extends "layout.njk" %}
+{% block main %}
+
+/**
+ * A program error, carrying the numeric error code defined in the IDL
+ * and its human-readable message.
+ *
+ * Use the generated `Errors::exception($code)` factory to build one
+ * from an on-chain error code.
+ */
+final class ProgramException extends ClientException
+{
+    public function __construct(
+        public readonly int $errorCode,
+        string $message,
+    ) {
+        parent::__construct($message, $errorCode);
+    }
+}
+{% endblock %}

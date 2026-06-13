@@ -1,0 +1,284 @@
+{% extends "layout.njk" %}
+{% block main %}
+
+/**
+ * Borsh serialization helpers (write side).
+ *
+ * Requirements: PHP 8.1+ and the GMP extension (ext-gmp). GMP is used for
+ * u64 values above PHP_INT_MAX as well as u128/i128 arithmetic. All other
+ * scalars are handled with native integers and `pack`.
+ *
+ * Integer representation conventions of the generated client:
+ * - u8..u32 and i8..i64 are represented as PHP `int`.
+ * - u64, u128 and i128 are represented as `int|string`: values that fit in
+ *   a PHP `int` are ints, anything larger is a decimal `string`. The write
+ *   helpers also accept `\GMP` instances.
+ */
+final class Borsh
+{
+    private function __construct() {}
+
+    public static function u8(int $value): string
+    {
+        if ($value < 0 || $value > 0xFF) {
+            throw new \InvalidArgumentException('u8 out of range: ' . $value);
+        }
+        return \chr($value);
+    }
+
+    public static function u16(int $value): string
+    {
+        if ($value < 0 || $value > 0xFFFF) {
+            throw new \InvalidArgumentException('u16 out of range: ' . $value);
+        }
+        return \pack('v', $value);
+    }
+
+    public static function u32(int $value): string
+    {
+        if ($value < 0 || $value > 0xFFFFFFFF) {
+            throw new \InvalidArgumentException('u32 out of range: ' . $value);
+        }
+        return \pack('V', $value);
+    }
+
+    public static function u64(int|string|\GMP $value): string
+    {
+        if (\is_int($value)) {
+            if ($value < 0) {
+                throw new \InvalidArgumentException('u64 out of range: ' . $value);
+            }
+            return \pack('P', $value);
+        }
+        return self::uintToLeBytes($value, 8, 'u64');
+    }
+
+    public static function u128(int|string|\GMP $value): string
+    {
+        if (\is_int($value)) {
+            if ($value < 0) {
+                throw new \InvalidArgumentException('u128 out of range: ' . $value);
+            }
+            return \pack('P', $value) . "\x00\x00\x00\x00\x00\x00\x00\x00";
+        }
+        return self::uintToLeBytes($value, 16, 'u128');
+    }
+
+    public static function i8(int $value): string
+    {
+        if ($value < -0x80 || $value > 0x7F) {
+            throw new \InvalidArgumentException('i8 out of range: ' . $value);
+        }
+        return \chr($value & 0xFF);
+    }
+
+    public static function i16(int $value): string
+    {
+        if ($value < -0x8000 || $value > 0x7FFF) {
+            throw new \InvalidArgumentException('i16 out of range: ' . $value);
+        }
+        return \pack('v', $value & 0xFFFF);
+    }
+
+    public static function i32(int $value): string
+    {
+        if ($value < -0x80000000 || $value > 0x7FFFFFFF) {
+            throw new \InvalidArgumentException('i32 out of range: ' . $value);
+        }
+        return \pack('V', $value & 0xFFFFFFFF);
+    }
+
+    public static function i64(int|string|\GMP $value): string
+    {
+        if (\is_int($value)) {
+            return \pack('P', $value); // Two's complement.
+        }
+        return self::intToLeBytes($value, 8, 'i64');
+    }
+
+    public static function i128(int|string|\GMP $value): string
+    {
+        if (\is_int($value)) {
+            $high = $value < 0 ? "\xff\xff\xff\xff\xff\xff\xff\xff" : "\x00\x00\x00\x00\x00\x00\x00\x00";
+            return \pack('P', $value) . $high;
+        }
+        return self::intToLeBytes($value, 16, 'i128');
+    }
+
+    public static function f32(float $value): string
+    {
+        return \pack('g', $value);
+    }
+
+    public static function f64(float $value): string
+    {
+        return \pack('e', $value);
+    }
+
+    public static function bool(bool $value): string
+    {
+        return $value ? "\x01" : "\x00";
+    }
+
+    /** Compact-u16 (short_vec) encoding. */
+    public static function shortU16(int $value): string
+    {
+        if ($value < 0 || $value > 0xFFFF) {
+            throw new \InvalidArgumentException('shortU16 out of range: ' . $value);
+        }
+        $out = '';
+        do {
+            $byte = $value & 0x7F;
+            $value >>= 7;
+            if ($value !== 0) {
+                $byte |= 0x80;
+            }
+            $out .= \chr($byte);
+        } while ($value !== 0);
+        return $out;
+    }
+
+    /** Size-prefixed string (u32 prefix by default). */
+    public static function str(string $value, string $count = 'u32'): string
+    {
+        return self::count(\strlen($value), $count) . $value;
+    }
+
+    /** Fixed-size string, padded with NUL bytes up to `$size`. */
+    public static function fixedStr(string $value, int $size): string
+    {
+        if (\strlen($value) > $size) {
+            throw new \InvalidArgumentException('Fixed string is longer than ' . $size . ' bytes');
+        }
+        return \str_pad($value, $size, "\x00");
+    }
+
+    /** Size-prefixed bytes (u32 prefix by default). */
+    public static function bytes(string $value, string $count = 'u32'): string
+    {
+        return self::count(\strlen($value), $count) . $value;
+    }
+
+    /** Fixed-size bytes, padded with NUL bytes up to `$size`. */
+    public static function fixedBytes(string $value, int $size): string
+    {
+        return self::fixedStr($value, $size);
+    }
+
+    /**
+     * Option: 1-byte presence flag followed by the value when present.
+     *
+     * @template T
+     * @param T|null $value
+     * @param callable(T): string $serializeItem
+     */
+    public static function option(mixed $value, callable $serializeItem): string
+    {
+        return $value === null ? "\x00" : "\x01" . $serializeItem($value);
+    }
+
+    /**
+     * Array of items. `$count` is one of:
+     * - a count format ('u8', 'u16', 'u32', 'u64', 'shortU16') for prefixed arrays;
+     * - an int for fixed-size arrays (the item count is validated);
+     * - 'remainder' for arrays without any size information.
+     *
+     * @template T
+     * @param list<T> $items
+     * @param callable(T): string $serializeItem
+     */
+    public static function vec(array $items, callable $serializeItem, int|string $count = 'u32'): string
+    {
+        $out = '';
+        if (\is_int($count)) {
+            if (\count($items) !== $count) {
+                throw new \InvalidArgumentException(
+                    'Expected exactly ' . $count . ' items, got ' . \count($items),
+                );
+            }
+        } elseif ($count !== 'remainder') {
+            $out .= self::count(\count($items), $count);
+        }
+        foreach ($items as $item) {
+            $out .= $serializeItem($item);
+        }
+        return $out;
+    }
+
+    /**
+     * Map (associative array). Entries are written in insertion order.
+     *
+     * @template TKey of array-key
+     * @template TValue
+     * @param array<TKey, TValue> $map
+     * @param callable(TKey): string $serializeKey
+     * @param callable(TValue): string $serializeValue
+     */
+    public static function map(
+        array $map,
+        callable $serializeKey,
+        callable $serializeValue,
+        int|string $count = 'u32',
+    ): string {
+        $out = '';
+        if (\is_int($count)) {
+            if (\count($map) !== $count) {
+                throw new \InvalidArgumentException(
+                    'Expected exactly ' . $count . ' entries, got ' . \count($map),
+                );
+            }
+        } elseif ($count !== 'remainder') {
+            $out .= self::count(\count($map), $count);
+        }
+        foreach ($map as $key => $value) {
+            $out .= $serializeKey($key) . $serializeValue($value);
+        }
+        return $out;
+    }
+
+    private static function count(int $length, string $count): string
+    {
+        return match ($count) {
+            'u8' => self::u8($length),
+            'u16' => self::u16($length),
+            'u32' => self::u32($length),
+            'u64' => self::u64($length),
+            'shortU16' => self::shortU16($length),
+            default => throw new \InvalidArgumentException('Unsupported count format: ' . $count),
+        };
+    }
+
+    private static function uintToLeBytes(int|string|\GMP $value, int $size, string $what): string
+    {
+        self::ensureGmp();
+        $gmp = $value instanceof \GMP ? $value : \gmp_init((string) $value, 10);
+        if (\gmp_sign($gmp) < 0 || \gmp_cmp($gmp, \gmp_pow(2, 8 * $size)) >= 0) {
+            throw new \InvalidArgumentException($what . ' out of range: ' . \gmp_strval($gmp));
+        }
+        return \str_pad(\gmp_export($gmp, 1, \GMP_LSW_FIRST | \GMP_NATIVE_ENDIAN), $size, "\x00");
+    }
+
+    private static function intToLeBytes(int|string|\GMP $value, int $size, string $what): string
+    {
+        self::ensureGmp();
+        $gmp = $value instanceof \GMP ? $value : \gmp_init((string) $value, 10);
+        $bound = \gmp_pow(2, 8 * $size - 1);
+        if (\gmp_cmp($gmp, \gmp_neg($bound)) < 0 || \gmp_cmp($gmp, $bound) >= 0) {
+            throw new \InvalidArgumentException($what . ' out of range: ' . \gmp_strval($gmp));
+        }
+        if (\gmp_sign($gmp) < 0) {
+            $gmp = \gmp_add($gmp, \gmp_pow(2, 8 * $size)); // Two's complement.
+        }
+        return \str_pad(\gmp_export($gmp, 1, \GMP_LSW_FIRST | \GMP_NATIVE_ENDIAN), $size, "\x00");
+    }
+
+    private static function ensureGmp(): void
+    {
+        if (!\extension_loaded('gmp')) {
+            throw new ClientException(
+                'The generated client requires the GMP extension (ext-gmp) for big integer support.',
+            );
+        }
+    }
+}
+{% endblock %}

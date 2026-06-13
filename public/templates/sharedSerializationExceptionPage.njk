@@ -1,0 +1,9 @@
+{% extends "layout.njk" %}
+{% block main %}
+
+/**
+ * Thrown when Borsh (de)serialization fails, e.g. when reading past the
+ * end of the data or decoding an unknown enum variant index.
+ */
+final class SerializationException extends ClientException {}
+{% endblock %}

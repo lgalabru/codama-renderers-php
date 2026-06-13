@@ -1,0 +1,266 @@
+{% extends "layout.njk" %}
+{% block main %}
+
+/**
+ * Borsh deserialization helper (read side).
+ *
+ * Stateful reader over a binary string. See {@see Borsh} for the integer
+ * representation conventions (u64/u128/i128 are returned as `int` when the
+ * value fits in a PHP `int` and as a decimal `string` otherwise; this
+ * requires the GMP extension).
+ */
+final class BorshReader
+{
+    private int $offset = 0;
+
+    public function __construct(private readonly string $data) {}
+
+    public function offset(): int
+    {
+        return $this->offset;
+    }
+
+    public function remaining(): int
+    {
+        return \strlen($this->data) - $this->offset;
+    }
+
+    public function read(int $length): string
+    {
+        if ($length < 0 || $this->offset + $length > \strlen($this->data)) {
+            throw new SerializationException('Unexpected end of data');
+        }
+        $bytes = \substr($this->data, $this->offset, $length);
+        $this->offset += $length;
+        return $bytes;
+    }
+
+    public function readRemainder(): string
+    {
+        return $this->read($this->remaining());
+    }
+
+    public function readU8(): int
+    {
+        return \ord($this->read(1));
+    }
+
+    public function readU16(): int
+    {
+        /** @var array{1: int} $parts unpack('v') cannot fail on exactly 2 bytes. */
+        $parts = \unpack('v', $this->read(2));
+        return $parts[1];
+    }
+
+    public function readU32(): int
+    {
+        /** @var array{1: int} $parts unpack('V') cannot fail on exactly 4 bytes. */
+        $parts = \unpack('V', $this->read(4));
+        return $parts[1];
+    }
+
+    /** @return int|numeric-string */
+    public function readU64(): int|string
+    {
+        $low = $this->readU32();
+        $high = $this->readU32();
+        if ($high < 0x80000000) {
+            return ($high << 32) | $low;
+        }
+        self::ensureGmp();
+        /** @var numeric-string $value gmp_strval() always returns decimal digits. */
+        $value = \gmp_strval(\gmp_add(\gmp_mul($high, '4294967296'), $low));
+        return $value;
+    }
+
+    /** @return int|numeric-string */
+    public function readU128(): int|string
+    {
+        self::ensureGmp();
+        $gmp = \gmp_import($this->read(16), 1, \GMP_LSW_FIRST | \GMP_NATIVE_ENDIAN);
+        if (\gmp_cmp($gmp, \PHP_INT_MAX) <= 0) {
+            return \gmp_intval($gmp);
+        }
+        /** @var numeric-string $value gmp_strval() always returns decimal digits. */
+        $value = \gmp_strval($gmp);
+        return $value;
+    }
+
+    public function readI8(): int
+    {
+        $value = $this->readU8();
+        return $value >= 0x80 ? $value - 0x100 : $value;
+    }
+
+    public function readI16(): int
+    {
+        $value = $this->readU16();
+        return $value >= 0x8000 ? $value - 0x10000 : $value;
+    }
+
+    public function readI32(): int
+    {
+        $value = $this->readU32();
+        return $value >= 0x80000000 ? $value - 0x100000000 : $value;
+    }
+
+    public function readI64(): int
+    {
+        $low = $this->readU32();
+        $high = $this->readU32();
+        return ($high << 32) | $low; // Two's complement wraps naturally.
+    }
+
+    /** @return int|numeric-string */
+    public function readI128(): int|string
+    {
+        self::ensureGmp();
+        $gmp = \gmp_import($this->read(16), 1, \GMP_LSW_FIRST | \GMP_NATIVE_ENDIAN);
+        if (\gmp_cmp($gmp, \gmp_pow(2, 127)) >= 0) {
+            $gmp = \gmp_sub($gmp, \gmp_pow(2, 128));
+        }
+        if (\gmp_cmp($gmp, \PHP_INT_MAX) <= 0 && \gmp_cmp($gmp, \PHP_INT_MIN) >= 0) {
+            return \gmp_intval($gmp);
+        }
+        /** @var numeric-string $value gmp_strval() always returns decimal digits. */
+        $value = \gmp_strval($gmp);
+        return $value;
+    }
+
+    public function readF32(): float
+    {
+        /** @var array{1: float} $parts unpack('g') cannot fail on exactly 4 bytes. */
+        $parts = \unpack('g', $this->read(4));
+        return $parts[1];
+    }
+
+    public function readF64(): float
+    {
+        /** @var array{1: float} $parts unpack('e') cannot fail on exactly 8 bytes. */
+        $parts = \unpack('e', $this->read(8));
+        return $parts[1];
+    }
+
+    public function readBool(): bool
+    {
+        return $this->readU8() !== 0;
+    }
+
+    /** Compact-u16 (short_vec) decoding. */
+    public function readShortU16(): int
+    {
+        $value = 0;
+        $shift = 0;
+        while (true) {
+            $byte = $this->readU8();
+            $value |= ($byte & 0x7F) << $shift;
+            if (($byte & 0x80) === 0) {
+                break;
+            }
+            $shift += 7;
+            if ($shift > 14) {
+                throw new SerializationException('Invalid shortU16 encoding');
+            }
+        }
+        return $value;
+    }
+
+    public function readString(string $count = 'u32'): string
+    {
+        return $this->read($this->readCount($count));
+    }
+
+    public function readFixedString(int $length): string
+    {
+        return $this->read($length);
+    }
+
+    public function readBytes(string $count = 'u32'): string
+    {
+        return $this->read($this->readCount($count));
+    }
+
+    /**
+     * Option: 1-byte presence flag followed by the value when present.
+     *
+     * @template T
+     * @param callable(): T $readItem
+     * @return T|null
+     */
+    public function readOption(callable $readItem): mixed
+    {
+        return $this->readBool() ? $readItem() : null;
+    }
+
+    /**
+     * Array of items. See {@see Borsh::vec()} for the `$count` semantics.
+     *
+     * @template T
+     * @param callable(): T $readItem
+     * @return list<T>
+     */
+    public function readVec(callable $readItem, int|string $count = 'u32'): array
+    {
+        $items = [];
+        if ($count === 'remainder') {
+            while ($this->remaining() > 0) {
+                $items[] = $readItem();
+            }
+            return $items;
+        }
+        $length = \is_int($count) ? $count : $this->readCount($count);
+        for ($i = 0; $i < $length; $i++) {
+            $items[] = $readItem();
+        }
+        return $items;
+    }
+
+    /**
+     * Map (associative array). Keys must deserialize to `int` or `string`.
+     *
+     * @template TKey of array-key
+     * @template TValue
+     * @param callable(): TKey $readKey
+     * @param callable(): TValue $readValue
+     * @return array<TKey, TValue>
+     */
+    public function readMap(callable $readKey, callable $readValue, int|string $count = 'u32'): array
+    {
+        $map = [];
+        if ($count === 'remainder') {
+            while ($this->remaining() > 0) {
+                $key = $readKey();
+                $map[$key] = $readValue();
+            }
+            return $map;
+        }
+        $length = \is_int($count) ? $count : $this->readCount($count);
+        for ($i = 0; $i < $length; $i++) {
+            $key = $readKey();
+            $map[$key] = $readValue();
+        }
+        return $map;
+    }
+
+    private function readCount(string $count): int
+    {
+        return match ($count) {
+            'u8' => $this->readU8(),
+            'u16' => $this->readU16(),
+            'u32' => $this->readU32(),
+            'u64' => (int) $this->readU64(),
+            'shortU16' => $this->readShortU16(),
+            default => throw new \InvalidArgumentException('Unsupported count format: ' . $count),
+        };
+    }
+
+    private static function ensureGmp(): void
+    {
+        if (!\extension_loaded('gmp')) {
+            throw new ClientException(
+                'The generated client requires the GMP extension (ext-gmp) for big integer support.',
+            );
+        }
+    }
+}
+{% endblock %}
